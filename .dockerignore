@@ -1,9 +1,66 @@
+# Git
 .git
-.dockerignore
 .gitignore
+.github
+
+# Docker
+.docker
+.dockerignore
 Dockerfile
+docker-compose*.yml
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# Build
+bin/
+dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Testing
+*_test.go
+coverage.txt
+coverage.html
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+
+# Documentation
 docs/
+*.md
 LICENSE
-README.md
-vault-token.txt
-migrations/.keep
+
+# Development configs
+.env*
+*.env
+*.log
+.pre-commit-config.yaml
+.goreleaser.yml
+.revive.toml
+
+# Dependencies
+vendor/
+
+# Kubernetes / Helm
+deploy/
+charts/
+*.yaml
+!go.work.sum
+!go.sum
+
+# Misc
+*.prof
+*.test
+*.out
+.DS_Store

@@ -1,27 +1,40 @@
-# Specify the Go version
-ARG GO_VERSION=1.23.3
-FROM golang:${GO_VERSION}-alpine AS development
+# syntax=docker/dockerfile:1
+
+# Build stage
+FROM golang:1.23.3-alpine AS builder
 
 WORKDIR /app
-COPY . .
 
-# Download dependencies
+# Copy go mod files first for better caching
+COPY go.mod go.sum ./
 RUN go mod download
 
-# Command to run the application in development mode
-CMD ["go", "run", "cmd/vault-migrations/main.go"]
+# Copy source code
+COPY . .
 
-FROM development AS build
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o vault-migrate cmd/vault-migrations/main.go
+# Build the binary with hardening flags
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -a -installsuffix cgo \
+    -ldflags='-w -s -extldflags "-static"' \
+    -tags netgo,osusergo \
+    -o vault-migrate \
+    cmd/vault-migrations/main.go
 
+
+# # Runtime stage
 # FROM gcr.io/distroless/cc-debian12@sha256:899570acf85a1f1362862a9ea4d9e7b1827cb5c62043ba5b170b21de89618608 AS runtime
-FROM golang:${GO_VERSION}-alpine AS runtime
+FROM builder AS runtime
+# FROM gcr.io/distroless/static:nonroot AS runtime
 
-WORKDIR /app
-COPY --from=build --chown=nobody:nogroup /app/vault-migrate /bin/vault-migrate
-COPY --from=development --chown=nobody:nogroup /app/migrations migrations/
+# Copy the binary
+COPY --from=builder --chown=nobody:nogroup /app/vault-migrate /bin/vault-migrate
+# Copy migrations directory
+COPY --from=builder --chown=nobody:nogroup /app/migrations /migrations
 
-# Use a non-root user for security
 USER nobody
 
-# CMD ["vault-migrate"]
+# Set environment variables
+ENV TZ=Etc/UTC \
+    APP_USER=nonroot
+
+# ENTRYPOINT ["/bin/vault-migrate"]
