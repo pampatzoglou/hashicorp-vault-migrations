@@ -1,0 +1,9 @@
+.git
+.dockerignore
+.gitignore
+Dockerfile
+docs/
+LICENSE
+README.md
+vault-token.txt
+migrations/.keep

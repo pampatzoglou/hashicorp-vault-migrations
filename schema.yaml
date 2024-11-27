@@ -1,0 +1,12 @@
+paths:
+  - path: "secret/data/my-app/config"
+    method: "write"
+    data:
+      key1: "value1"
+      key2: "value2"
+
+  - path: "auth/token/roles/my-role"
+    method: "write"
+    data:
+      ttl: "30m"
+      renewable: true

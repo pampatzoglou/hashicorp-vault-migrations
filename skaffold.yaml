@@ -1,0 +1,15 @@
+apiVersion: skaffold/v4beta1
+kind: Config
+metadata:
+  name: hashicorp-vault-migrations
+build:
+  local:
+    push: false
+  tagPolicy:
+    gitCommit: {}
+  artifacts:
+    - &build-app
+      image: ghcr.io/pampatzoglou/hashicorp-vault-migrations
+      docker:
+        target: development
+        dockerfile: Dockerfile
