@@ -122,7 +122,7 @@ Sequence Diagram
 
 Applying Migrations
 
-'''sequenceDiagram
+```sequenceDiagram {theme="hand"}
     participant User
     participant CLI
     participant ConfigLoader
@@ -142,10 +142,10 @@ Applying Migrations
     VaultServer-->>MigrationRunner: Confirm success
     MigrationRunner-->>CLI: Migration applied
     CLI-->>User: Output results
-'''
+```
 Generating Migrations
 
-'''sequenceDiagram
+```sequenceDiagram {theme="hand"}
     participant User
     participant CLI
     participant ConfigLoader
@@ -162,7 +162,7 @@ Generating Migrations
     VaultClient-->>MigrationGenerator: Return current state
     MigrationGenerator-->>CLI: Output migration files
     CLI-->>User: Confirm generation success
-'''
+```
 Future Improvements
 
 Enhanced Error Reporting:
