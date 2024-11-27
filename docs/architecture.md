@@ -123,12 +123,6 @@ Sequence Diagram
 Applying Migrations
 
 ```sequence {theme="hand"}
-    participant User
-    participant CLI
-    participant ConfigLoader
-    participant VaultClient
-    participant MigrationRunner
-    participant VaultServer
 
     User->>CLI: Run --apply command
     CLI->>ConfigLoader: Load config.yaml
