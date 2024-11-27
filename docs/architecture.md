@@ -122,7 +122,7 @@ Sequence Diagram
 
 Applying Migrations
 
-```sequenceDiagram {theme="hand"}
+```sequence {theme="hand"}
     participant User
     participant CLI
     participant ConfigLoader
@@ -145,7 +145,7 @@ Applying Migrations
 ```
 Generating Migrations
 
-```sequenceDiagram {theme="hand"}
+```sequence {theme="hand"}
     participant User
     participant CLI
     participant ConfigLoader
