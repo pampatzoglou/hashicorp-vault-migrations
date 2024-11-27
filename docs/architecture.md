@@ -104,8 +104,6 @@ Architecture Diagram
 
 The following diagram represents the high-level architecture:
 
-
-
 Key Components:
 
 CLI interacts with the user and drives the workflow.
@@ -122,7 +120,7 @@ Sequence Diagram
 
 Applying Migrations
 
-sequenceDiagram
+```sequence
     participant User
     participant CLI
     participant ConfigLoader
@@ -142,10 +140,10 @@ sequenceDiagram
     VaultServer-->>MigrationRunner: Confirm success
     MigrationRunner-->>CLI: Migration applied
     CLI-->>User: Output results
-
+````
 Generating Migrations
 
-sequenceDiagram
+```sequence
     participant User
     participant CLI
     participant ConfigLoader
@@ -162,6 +160,7 @@ sequenceDiagram
     VaultClient-->>MigrationGenerator: Return current state
     MigrationGenerator-->>CLI: Output migration files
     CLI-->>User: Confirm generation success
+```
 
 Future Improvements
 

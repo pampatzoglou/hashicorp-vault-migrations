@@ -1,12 +1,135 @@
 paths:
-  - path: "secret/data/my-app/config"
+  # KV2 Secret Engine with unversioned secrets
+  - path: "sys/mounts/unversioned"
     method: "write"
     data:
-      key1: "value1"
-      key2: "value2"
+      type: "kv"
+      options:
+        version: "2"
 
-  - path: "auth/token/roles/my-role"
+  - path: "unversioned/metadata/config"
     method: "write"
     data:
-      ttl: "30m"
-      renewable: true
+      cas_required: false
+      delete_version_after: "0s"
+      max_versions: 1
+      
+  - path: "unversioned/data/app1/config"
+    method: "write,read"
+    data:
+      data:
+        api_key: "your-api-key"
+        environment: "production"
+        database_url: "postgresql://db.example.com:5432"
+
+  # KV2 Secret Engine with versioned secrets
+  - path: "sys/mounts/versioned"
+    method: "write"
+    data:
+      type: "kv"
+      options:
+        version: "2"
+
+  - path: "versioned/metadata/config"
+    method: "write"
+    data:
+      cas_required: true
+      delete_version_after: "30d"
+      max_versions: 10
+
+  - path: "versioned/data/app2/config"
+    method: "write,read"
+    data:
+      data:
+        api_key: "versioned-api-key"
+        environment: "staging"
+        features:
+          feature1: true
+          feature2: false
+
+  # PKI Secret Engine
+  - path: "sys/mounts/pki"
+    method: "write"
+    data:
+      type: "pki"
+      config:
+        max_lease_ttl: "87600h" # 10 years
+
+  - path: "pki/root/generate/internal"
+    method: "write"
+    data:
+      common_name: "example.com"
+      ttl: "87600h"
+      key_type: "rsa"
+      key_bits: 4096
+      exclude_cn_from_sans: true
+      
+  - path: "pki/config/urls"
+    method: "write"
+    data:
+      issuing_certificates: "https://vault.example.com:8200/v1/pki/ca"
+      crl_distribution_points: "https://vault.example.com:8200/v1/pki/crl"
+      ocsp_servers: "https://vault.example.com:8200/v1/pki/ocsp"
+
+  - path: "pki/roles/example-dot-com"
+    method: "write,read"
+    data:
+      allowed_domains: ["example.com"]
+      allow_subdomains: true
+      max_ttl: "72h"
+      key_type: "rsa"
+      key_bits: 2048
+      allowed_uri_sans: []
+      enforce_hostnames: true
+      require_cn: true
+      
+  # Database Secret Engine for PostgreSQL
+  - path: "sys/mounts/database"
+    method: "write"
+    data:
+      type: "database"
+      description: "PostgreSQL dynamic credentials"
+
+  - path: "database/config/postgresql"
+    method: "write"
+    data:
+      plugin_name: "postgresql-database-plugin"
+      allowed_roles: ["admin", "application"]
+      connection_url: "postgresql://{{username}}:{{password}}@postgres:5432/myapp?sslmode=verify-full"
+      username: "vault_superuser"
+      password: "vault_superuser_password"
+      max_open_connections: 5
+      max_idle_connections: 2
+      max_connection_lifetime: "1h"
+
+  - path: "database/roles/admin"
+    method: "write,read"
+    data:
+      db_name: "postgresql"
+      creation_statements: |
+        CREATE ROLE "{{name}}" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';
+        GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO "{{name}}";
+        GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO "{{name}}";
+        GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO "{{name}}";
+      default_ttl: "1h"
+      max_ttl: "24h"
+      revocation_statements: |
+        REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM "{{name}}";
+        REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM "{{name}}";
+        REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public FROM "{{name}}";
+        DROP ROLE IF EXISTS "{{name}}";
+
+  - path: "database/roles/application"
+    method: "write,read"
+    data:
+      db_name: "postgresql"
+      creation_statements: |
+        CREATE ROLE "{{name}}" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';
+        GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "{{name}}";
+        GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO "{{name}}";
+      default_ttl: "1h"
+      max_ttl: "24h"
+      revocation_statements: |
+        REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM "{{name}}";
+        REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM "{{name}}";
+        DROP ROLE IF EXISTS "{{name}}";
