@@ -1,0 +1,6 @@
+vault:
+  address: "http://127.0.0.1:8200" # Replace with your Vault server address
+  tokenFile: "./vault-token.txt"   # Path to the file containing the Vault token
+
+migrations:
+  directory: "./migrations"        # Directory where migration files are stored
