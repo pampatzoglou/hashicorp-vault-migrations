@@ -7,34 +7,52 @@ replicaCount: 1
 image:
   repository: hashicorp-vault-migrations
   pullPolicy: IfNotPresent
-  # Overrides the image tag whose default is the chart appVersion.
-  tag: ""
+  tag: "latest"
 
 imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
 serviceAccount:
-  # Specifies whether a service account should be created
   create: true
-  # Annotations to add to the service account
   annotations: {}
-  # The name of the service account to use.
-  # If not set and create is true, a name is generated using the fullname template
   name: ""
+
+# Vault connection configuration
+vault:
+  enabled: true
+  address: ""
+  token: ""
+  namespace: ""
+  skipVerify: false
+  # Existing secret containing Vault token
+  existingSecret: ""
+  tokenKey: "token"
+
+# Migration configuration
+config:
+  logLevel: info
+  logFormat: json
+  # Schema configuration
+  schema:
+    # ConfigMap containing schema.yaml
+    configMap: ""
+    key: "schema.yaml"
 
 podAnnotations: {}
 
-podSecurityContext: {}
-  # fsGroup: 2000
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  fsGroup: 65532
 
-securityContext: {}
-  # capabilities:
-  #   drop:
-  #   - ALL
-  # readOnlyRootFilesystem: true
-  # runAsNonRoot: true
-  # runAsUser: 1000
+securityContext:
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65532
 
 service:
   type: ClusterIP
@@ -56,17 +74,13 @@ ingress:
   #    hosts:
   #      - chart-example.local
 
-resources: {}
-  # We usually recommend not to specify default resources and to leave this as a conscious
-  # choice for the user. This also increases chances charts run on environments with little
-  # resources, such as Minikube. If you do want to specify resources, uncomment the following
-  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
-  # limits:
-  #   cpu: 100m
-  #   memory: 128Mi
-  # requests:
-  #   cpu: 100m
-  #   memory: 128Mi
+resources:
+  limits:
+    cpu: 500m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
 
 autoscaling:
   enabled: false
@@ -80,3 +94,26 @@ nodeSelector: {}
 tolerations: []
 
 affinity: {}
+
+# CronJob configuration for periodic migration checks
+cronJob:
+  enabled: false
+  schedule: "0 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+  restartPolicy: OnFailure
+
+# Vault server configuration (from dependency)
+vault:
+  server:
+    dev:
+      enabled: true
+    standalone:
+      enabled: false
+    ha:
+      enabled: false
+  injector:
+    enabled: false

@@ -33,3 +33,8 @@ maintainers: # (optional)
   - name: Pantelis Ampatzoglou
     email: pampatzoglou@gmail.com
     url: https://github.com/pampatzoglou
+
+keywords:
+  - vault
+  - migrations
+  - configuration
