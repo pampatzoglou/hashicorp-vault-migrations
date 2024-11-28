@@ -10,3 +10,124 @@ paths:
     data:
       ttl: "30m"
       renewable: true
+
+desired_state:
+  # Auth Methods
+  auth/approle:
+    type: approle
+    description: "AppRole auth method for service authentication"
+    config:
+      default_lease_ttl: "1h"
+      max_lease_ttl: "24h"
+  
+  # PKI Secret Engine
+  pki/:
+    type: pki
+    description: "PKI secrets engine for certificate management"
+    config:
+      max_lease_ttl: "87600h" # 10 years
+    tune:
+      default_lease_ttl: "8760h" # 1 year
+      max_lease_ttl: "87600h"    # 10 years
+  
+  # PKI Root CA Configuration
+  pki/root/generate/internal:
+    common_name: "Example Root CA"
+    ttl: "87600h"
+    key_type: "rsa"
+    key_bits: 4096
+    exclude_cn_from_sans: true
+    
+  # PKI Role Configuration
+  pki/roles/example-dot-com:
+    allowed_domains: ["example.com"]
+    allow_subdomains: true
+    max_ttl: "72h"
+    key_type: "rsa"
+    key_bits: 2048
+    allowed_uri_sans: []
+    enforce_hostnames: true
+    allow_ip_sans: true
+    
+  # PostgreSQL Secret Engine
+  database/:
+    type: database
+    description: "PostgreSQL database secrets engine"
+    config:
+      default_lease_ttl: "1h"
+      max_lease_ttl: "24h"
+  
+  # PostgreSQL Connection Configuration
+  database/config/postgresql:
+    plugin_name: "postgresql-database-plugin"
+    allowed_roles: ["readonly", "readwrite"]
+    connection_url: "postgresql://{{username}}:{{password}}@postgres:5432/myapp?sslmode=disable"
+    username: "vault"
+    password: "{{env `POSTGRES_PASSWORD`}}"
+    
+  # PostgreSQL Role Configurations
+  database/roles/readonly:
+    db_name: "postgresql"
+    creation_statements: |
+      CREATE ROLE "{{name}}" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';
+      GRANT SELECT ON ALL TABLES IN SCHEMA public TO "{{name}}";
+    default_ttl: "1h"
+    max_ttl: "24h"
+    
+  database/roles/readwrite:
+    db_name: "postgresql"
+    creation_statements: |
+      CREATE ROLE "{{name}}" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}';
+      GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "{{name}}";
+    default_ttl: "1h"
+    max_ttl: "24h"
+  
+  # Policies
+  sys/policies/acl/app-policy:
+    policies:
+      # Allow reading secrets
+      - path "secret/data/app/*" {
+          capabilities = ["read", "list"]
+        }
+      
+      # Allow token renewal
+      - path "auth/token/renew-self" {
+          capabilities = ["update"]
+        }
+      
+      # Allow PKI certificate generation
+      - path "pki/issue/example-dot-com" {
+          capabilities = ["create", "update"]
+        }
+      
+      # Allow database credential generation
+      - path "database/creds/readonly" {
+          capabilities = ["read"]
+        }
+  
+  # AppRole Roles
+  auth/approle/role/app-role:
+    role_name: "app-role"
+    token_policies: ["app-policy"]
+    token_ttl: "1h"
+    token_max_ttl: "24h"
+    secret_id_ttl: "10m"
+    secret_id_num_uses: 1
+    
+  # Secrets Engines
+  secret/:
+    type: kv-v2
+    description: "KV Version 2 secret engine"
+    config:
+      max_versions: 10
+      cas_required: false
+  
+  # Example KV Secret
+  secret/data/app/config:
+    data:
+      api_key: "example-key"
+      environment: "production"
+      database:
+        host: "db.example.com"
+        port: 5432
+        name: "myapp"

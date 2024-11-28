@@ -1,15 +1,18 @@
 package migrations
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
-	"time"
+	"sync"
 
 	"github.com/hashicorp/vault/api"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v2"
 )
 
@@ -31,27 +34,42 @@ type MigrationRunner struct {
 	client        *api.Client
 	migrationsDir string
 	trackingPath  string
+	logger        zerolog.Logger
+	dryRun        bool
 }
 
 // NewMigrationRunner initializes a new MigrationRunner.
 func NewMigrationRunner(client *api.Client, config *Config) (*MigrationRunner, error) {
-	if client == nil {
-		return nil, errors.New("Vault client is required")
+	if config == nil {
+		return nil, errors.New("config is required")
 	}
 	if config.Migrations.Directory == "" {
 		return nil, errors.New("migrations directory is required")
 	}
 
+	// For non-generate commands, we need a Vault client
+	if client == nil && !config.DryRun {
+		return nil, errors.New("Vault client is required for non-dry-run operations")
+	}
+
+	logger := log.With().Str("component", "migration-runner").Logger()
+
 	return &MigrationRunner{
 		client:        client,
 		migrationsDir: config.Migrations.Directory,
-		trackingPath:  "migrations/version", // Vault path for tracking migration state
+		trackingPath:  "migrations/version",
+		logger:        logger,
+		dryRun:        config.DryRun,
 	}, nil
 }
 
 // getLastAppliedVersion retrieves the last applied migration version.
-func (m *MigrationRunner) getLastAppliedVersion() (int, error) {
-	secret, err := m.client.Logical().Read(m.trackingPath)
+func (m *MigrationRunner) getLastAppliedVersion(ctx context.Context) (int, error) {
+	if m.client == nil {
+		return 0, nil
+	}
+
+	secret, err := m.client.Logical().ReadWithContext(ctx, m.trackingPath)
 	if err != nil {
 		return 0, fmt.Errorf("failed to read tracking path: %w", err)
 	}
@@ -67,11 +85,15 @@ func (m *MigrationRunner) getLastAppliedVersion() (int, error) {
 }
 
 // setLastAppliedVersion updates the last applied migration version in Vault.
-func (m *MigrationRunner) setLastAppliedVersion(version int) error {
+func (m *MigrationRunner) setLastAppliedVersion(ctx context.Context, version int) error {
+	if m.client == nil {
+		return nil
+	}
+
 	data := map[string]interface{}{
 		"version": strconv.Itoa(version),
 	}
-	_, err := m.client.Logical().Write(m.trackingPath, data)
+	_, err := m.client.Logical().WriteWithContext(ctx, m.trackingPath, data)
 	if err != nil {
 		return fmt.Errorf("failed to update tracking path: %w", err)
 	}
@@ -79,7 +101,7 @@ func (m *MigrationRunner) setLastAppliedVersion(version int) error {
 }
 
 // loadMigrations loads migration files from the directory and sorts them by version.
-func (m *MigrationRunner) loadMigrations() ([]Migration, error) {
+func (m *MigrationRunner) loadMigrations(ctx context.Context) ([]Migration, error) {
 	files, err := filepath.Glob(filepath.Join(m.migrationsDir, "*.yaml"))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read migration files: %w", err)
@@ -100,7 +122,6 @@ func (m *MigrationRunner) loadMigrations() ([]Migration, error) {
 		migrations = append(migrations, migration)
 	}
 
-	// Sort migrations by version.
 	sort.Slice(migrations, func(i, j int) bool {
 		return migrations[i].Version < migrations[j].Version
 	})
@@ -109,54 +130,106 @@ func (m *MigrationRunner) loadMigrations() ([]Migration, error) {
 }
 
 // applyMigration applies a single migration.
-func (m *MigrationRunner) applyMigration(migration Migration) error {
-	for _, task := range migration.Tasks {
-		var err error
-		switch task.Method {
-		case "write":
-			_, err = m.client.Logical().Write(task.Path, task.Data)
-		case "delete":
-			_, err = m.client.Logical().Delete(task.Path)
-		default:
-			return fmt.Errorf("unsupported method %s for path %s", task.Method, task.Path)
-		}
+func (m *MigrationRunner) applyMigration(ctx context.Context, migration Migration) error {
+	if m.client == nil {
+		return fmt.Errorf("cannot apply migration without Vault client")
+	}
 
+	m.logger.Info().Int("version", migration.Version).Msg("Applying migration")
+
+	if m.dryRun {
+		m.logger.Info().Int("version", migration.Version).Msg("Dry run - skipping migration")
+		return nil
+	}
+
+	var wg sync.WaitGroup
+	errChan := make(chan error, len(migration.Tasks))
+
+	for _, task := range migration.Tasks {
+		wg.Add(1)
+		go func(t Task) {
+			defer wg.Done()
+			if err := m.executeTask(ctx, t); err != nil {
+				errChan <- fmt.Errorf("failed to execute task: %w", err)
+			}
+		}(task)
+	}
+
+	// Wait for all tasks to complete
+	wg.Wait()
+	close(errChan)
+
+	// Check for errors
+	for err := range errChan {
 		if err != nil {
-			return fmt.Errorf("failed to apply task at path %s: %w", task.Path, err)
+			return err
 		}
 	}
+
 	return nil
 }
 
-// RunMigrations executes all pending migrations.
-func (m *MigrationRunner) RunMigrations() error {
-	startTime := time.Now()
-
-	lastVersion, err := m.getLastAppliedVersion()
-	if err != nil {
-		return fmt.Errorf("failed to get last applied version: %w", err)
+// executeTask executes a single Vault task
+func (m *MigrationRunner) executeTask(ctx context.Context, task Task) error {
+	if m.client == nil {
+		return fmt.Errorf("cannot execute task without Vault client")
 	}
 
-	migrations, err := m.loadMigrations()
+	m.logger.Debug().
+		Str("path", task.Path).
+		Str("method", task.Method).
+		Interface("data", task.Data).
+		Msg("Executing task")
+
+	switch task.Method {
+	case "POST":
+		_, err := m.client.Logical().WriteWithContext(ctx, task.Path, task.Data)
+		return err
+	case "PUT":
+		_, err := m.client.Logical().WriteWithContext(ctx, task.Path, task.Data)
+		return err
+	case "DELETE":
+		_, err := m.client.Logical().DeleteWithContext(ctx, task.Path)
+		return err
+	default:
+		return fmt.Errorf("unsupported method: %s", task.Method)
+	}
+}
+
+// RunMigrations executes all pending migrations.
+func (m *MigrationRunner) RunMigrations(ctx context.Context) error {
+	if m.client == nil {
+		return fmt.Errorf("cannot run migrations without Vault client")
+	}
+
+	// Load all migrations
+	migrations, err := m.loadMigrations(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to load migrations: %w", err)
 	}
 
+	// Get last applied version
+	lastApplied, err := m.getLastAppliedVersion(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get last applied version: %w", err)
+	}
+
+	// Apply pending migrations
 	for _, migration := range migrations {
-		if migration.Version > lastVersion {
-			fmt.Printf("Applying migration version %d...\n", migration.Version)
-			if err := m.applyMigration(migration); err != nil {
-				return fmt.Errorf("failed to apply migration version %d: %w", migration.Version, err)
-			}
+		if migration.Version <= lastApplied {
+			continue
+		}
 
-			if err := m.setLastAppliedVersion(migration.Version); err != nil {
-				return fmt.Errorf("failed to update last applied version: %w", err)
-			}
+		if err := m.applyMigration(ctx, migration); err != nil {
+			return fmt.Errorf("failed to apply migration %d: %w", migration.Version, err)
+		}
 
-			fmt.Printf("Migration version %d applied successfully.\n", migration.Version)
+		if !m.dryRun {
+			if err := m.setLastAppliedVersion(ctx, migration.Version); err != nil {
+				return fmt.Errorf("failed to update version after migration %d: %w", migration.Version, err)
+			}
 		}
 	}
 
-	fmt.Printf("Migrations completed in %s.\n", time.Since(startTime))
 	return nil
 }
