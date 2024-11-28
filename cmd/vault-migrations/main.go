@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/hashicorp/vault/api"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/pampatzoglou/hashicorp-vault-migrations/pkg/migrations"
@@ -20,11 +22,13 @@ Usage:
   vault-migrations [flags]
 
 Flags:
-  -config string    Path to configuration file (default "config.yaml")
-  -dry-run         Perform a dry run without making changes
-  -log-level       Set logging level (debug, info, warn, error)
-  -help            Show this help message
-  -version         Show version information
+  --config string     Path to configuration file (default "config.yaml")
+  --schema string     Path to schema file (default "schema.yaml")
+  --dry-run          Perform a dry run without making changes
+  --log-level        Set logging level (debug, info, warn, error)
+  --generate         Generate migration from schema
+  --help             Show this help message
+  --version          Show version information
 
 Configuration File (YAML):
   vault:
@@ -53,11 +57,14 @@ Examples:
   # Run migrations with default config file
   vault-migrations
 
-  # Run migrations with custom config file
-  vault-migrations -config=/path/to/config.yaml
+  # Run migrations with custom config and schema files
+  vault-migrations --config=/path/to/config.yaml --schema=/path/to/schema.yaml
+
+  # Generate migration from schema
+  vault-migrations --generate --schema=/path/to/schema.yaml
 
   # Perform a dry run with debug logging
-  vault-migrations -dry-run -log-level=debug
+  vault-migrations --dry-run --log-level=debug
 
 Version: %s
 `
@@ -74,19 +81,42 @@ func printVersion() {
 	fmt.Printf("build date: %s\n", date)
 }
 
+// normalizeFlag converts a flag to use -- prefix if needed
+func normalizeFlag(name string) string {
+	if !strings.HasPrefix(name, "--") {
+		return "--" + name
+	}
+	return name
+}
+
 func main() {
-	// Parse command line flags
-	configFile := flag.String("config", "config.yaml", "Path to configuration file")
-	dryRun := flag.Bool("dry-run", false, "Perform a dry run without making changes")
-	logLevel := flag.String("log-level", "", "Log level (debug, info, warn, error)")
-	showVersion := flag.Bool("version", false, "Show version information")
-	
-	// Override default usage
-	flag.Usage = func() {
+	// Create custom FlagSet to handle -- prefix
+	fs := flag.NewFlagSet(os.Args[0], flag.ExitOnError)
+	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, usage, version)
 	}
-	
-	flag.Parse()
+
+	// Parse command line flags
+	configFile := fs.String("config", "config.yaml", "Path to configuration file")
+	schemaFile := fs.String("schema", "schema.yaml", "Path to schema file")
+	dryRun := fs.Bool("dry-run", false, "Perform a dry run without making changes")
+	logLevel := fs.String("log-level", "", "Log level (debug, info, warn, error)")
+	showVersion := fs.Bool("version", false, "Show version information")
+	generate := fs.Bool("generate", false, "Generate migration from schema")
+
+	// Handle -- prefix for flags
+	args := make([]string, 0, len(os.Args[1:]))
+	for _, arg := range os.Args[1:] {
+		if strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "--") {
+			arg = "-" + arg
+		}
+		args = append(args, arg)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing flags: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Show version if requested
 	if *showVersion {
@@ -98,57 +128,120 @@ func main() {
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
 
-	// Load configuration
-	config, err := migrations.LoadConfig(*configFile)
-	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to load configuration")
-	}
-
-	// Override config with command line flags
-	if *dryRun {
-		config.DryRun = true
-	}
 	if *logLevel != "" {
-		config.LogLevel = *logLevel
+		level, err := zerolog.ParseLevel(*logLevel)
+		if err != nil {
+			log.Fatal().Err(err).Msg("invalid log level")
+		}
+		zerolog.SetGlobalLevel(level)
 	}
 
-	// Set log level
-	level, err := zerolog.ParseLevel(config.LogLevel)
-	if err != nil {
-		log.Warn().Err(err).Msg("Invalid log level, defaulting to info")
-		level = zerolog.InfoLevel
-	}
-	zerolog.SetGlobalLevel(level)
+	// Load configuration
+	var config *migrations.Config
+	var err error
+	if *configFile != "" {
+		config, err = migrations.LoadConfig(*configFile)
+		if err != nil && !*generate {
+			log.Fatal().Err(err).Msg("failed to load configuration")
+		} else if err != nil {
+			// For generate command, we'll create a minimal config
+			config = &migrations.Config{
+				Migrations: migrations.MigrationsConfig{
+					Directory: "./migrations", // default directory
+				},
+			}
+		}
 
-	// Create context with cancellation
+		// Validate configuration based on mode
+		if err := config.Validate(*generate); err != nil {
+			log.Fatal().Err(err).Msg("invalid configuration")
+		}
+	}
+
+	// Override dry-run from command line if specified or in generate mode
+	if *dryRun || *generate {
+		if config != nil {
+			config.DryRun = true
+		}
+	}
+
+	// Create migration runner
+	var runner *migrations.MigrationRunner
+	if config != nil {
+		// For non-generate commands, create a Vault client
+		var client *api.Client
+		var err error
+		
+		if !*generate {
+			vaultClient, err := migrations.NewVaultClient(config.Vault)
+			if err != nil {
+				log.Fatal().Err(err).Msg("failed to create Vault client")
+			}
+			client = vaultClient.GetClient()
+		}
+
+		runner, err = migrations.NewMigrationRunner(client, config)
+		if err != nil {
+			log.Fatal().Err(err).Msg("failed to create migration runner")
+		}
+	}
+
+	// Handle generate command
+	if *generate {
+		migrationsDir := "./migrations" // default directory
+		if config != nil && config.Migrations.Directory != "" {
+			migrationsDir = config.Migrations.Directory
+		}
+
+		var currentConfig map[string]interface{}
+		var err error
+
+		// Try to connect to Vault and get current state
+		if config != nil && config.Vault.Address != "" {
+			client, err := migrations.NewVaultClient(config.Vault)
+			if err == nil {
+				currentConfig, err = client.GetCurrentState()
+				if err != nil {
+					log.Warn().Err(err).Msg("failed to get current state from Vault, will generate migration from schema only")
+				}
+			} else {
+				log.Warn().Err(err).Msg("failed to connect to Vault, will generate migration from schema only")
+			}
+		}
+
+		// Generate migration based on schema and available state
+		schema, err := migrations.LoadSchema(*schemaFile)
+		if err != nil {
+			log.Fatal().Err(err).Msg("failed to load schema")
+		}
+		result, err := migrations.GenerateIntelligentMigration(currentConfig, schema.DesiredState, migrationsDir)
+		if err != nil {
+			log.Fatal().Err(err).Msg("failed to generate migration")
+		}
+		log.Info().Msg(result)
+		return
+	}
+
+	// For non-generate commands, we need a valid config
+	if config == nil {
+		log.Fatal().Msg("configuration is required for non-generate commands")
+	}
+
+	// Set up context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Handle OS signals
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	// Handle signals
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		sig := <-sigChan
-		log.Info().Str("signal", sig.String()).Msg("Received signal, initiating graceful shutdown")
+		sig := <-sigCh
+		log.Info().Msgf("received signal %s, initiating shutdown", sig)
 		cancel()
 	}()
 
-	// Initialize Vault client
-	client, err := migrations.NewVaultClient(config)
-	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to initialize Vault client")
-	}
-
-	// Create a MigrationRunner
-	runner, err := migrations.NewMigrationRunner(client, config)
-	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to create MigrationRunner")
-	}
-
-	// Run the migrations
+	// Run migrations
 	if err := runner.RunMigrations(ctx); err != nil {
-		log.Fatal().Err(err).Msg("Failed to run migrations")
+		log.Fatal().Err(err).Msg("migration failed")
 	}
-
-	log.Info().Msg("Migrations completed successfully")
 }

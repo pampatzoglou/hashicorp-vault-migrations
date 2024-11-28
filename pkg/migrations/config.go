@@ -67,15 +67,28 @@ func LoadConfig(configPath string) (*Config, error) {
 	config.Vault.Namespace = interpolateEnv(config.Vault.Namespace)
 
 	// Validate configuration
-	if err := config.validate(); err != nil {
+	if err := config.Validate(false); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 
 	return config, nil
 }
 
-// validate checks if the configuration is valid
-func (c *Config) validate() error {
+// Validate checks if the configuration is valid
+func (c *Config) Validate(isGenerateOnly bool) error {
+	// For generate-only mode, we only require migrations directory
+	if isGenerateOnly {
+		if c.Migrations.Directory == "" {
+			return fmt.Errorf("migrations directory is required")
+		}
+		// Ensure migrations directory exists
+		if _, err := os.Stat(c.Migrations.Directory); os.IsNotExist(err) {
+			return fmt.Errorf("migrations directory does not exist: %s", c.Migrations.Directory)
+		}
+		return nil
+	}
+
+	// For other modes, validate Vault configuration
 	if c.Vault.Address == "" {
 		return fmt.Errorf("vault address is required")
 	}

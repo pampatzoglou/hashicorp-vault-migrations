@@ -11,4 +11,5 @@ This tool helps manage and apply schema-driven migrations for HashiCorp Vault.
 1. Define the desired state in `schema.yaml`.
 2. Generate migration files:
    ```bash
-   go run cmd/vault-migrations/main.go --generate```
+   go run cmd/vault-migrations/main.go --generate
+   ```
